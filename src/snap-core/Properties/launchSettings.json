@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Snap.Core": {
+      "commandName": "Project",
+      "commandLineArgs": "-pack --config \"C:\\Sandbox\""
+    }
+  }
+}
