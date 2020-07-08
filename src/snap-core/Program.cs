@@ -14,7 +14,7 @@ namespace snap_core
             catch (SnapException e)
             {
                 if (!e.Handled)
-                    throw e;
+                    throw;
 
                 Environment.Exit(-1);
             }

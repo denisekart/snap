@@ -1,42 +1,32 @@
 using System;
-using System.Collections.Generic;
 using System.Data.Common;
 using System.IO;
 using System.Linq;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using System.Text;
-using Docker.DotNet;
-using Docker.DotNet.Models;
 using EnvironmentBuilder;
 using EnvironmentBuilder.Abstractions;
 using EnvironmentBuilder.Extensions;
 using LibGit2Sharp;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
 using Nest;
 
 namespace Snap.Core
 {
-    [Flags]
-    public enum Targets
-    {
-        Pack = 1,
-        Unpack = 2,
-        Clean = 4,
-        Help = 8
-    }
     public class SnapRunner
     {
         private readonly IEnvironmentBuilder _environment;
+        private readonly IServiceProvider _serviceProvider;
         private Targets _targets;
         private SnapConfiguration _configuration;
 
-        private SnapRunner(IEnvironmentBuilder environment)
+        private SnapRunner(IEnvironmentBuilder environment, IServiceProvider serviceProvider)
         {
             _environment = environment;
+            _serviceProvider = serviceProvider;
 
             var pack = _environment.WithDescription("Packs a snapshot of the environment")
                 .Arg("pack").Arg("p").Default(false).Bundle().Build<bool>();
@@ -99,23 +89,31 @@ namespace Snap.Core
                 LogAndThrow($"Configuration does not exist ('{configurationLocation}')");
             }
 
-            var settings = new SnapConfiguration();
+            var settings = new SnapConfiguration(Path.GetDirectoryName(absoluteRoute),Path.GetFileName(absoluteRoute));
             new ConfigurationBuilder()
                 .AddJsonFile(absoluteRoute)
                 .Build().Bind(settings);
-            settings.ConfigurationDirectory = Path.GetDirectoryName(absoluteRoute);
-            settings.ConfigurationFile = Path.GetFileName(absoluteRoute);
+            
             return settings;
         }
         public static SnapRunner Create()
         {
+            var serviceCollection = new ServiceCollection();
+            Configure(serviceCollection);
+
             return new SnapRunner(EnvironmentManager.Create(cfg =>
                 cfg
                     .WithEnvironmentVariablePrefix("SNAP_")
                     .WithConsoleLogger()
                     .WithJsonFile("snap.json")
-                ));
+                ), serviceCollection.BuildServiceProvider());
         }
+
+        private static void Configure(ServiceCollection serviceCollection)
+        {
+            
+        }
+
         public void Run()
         {
             if (_targets.HasFlag(Targets.Help))
@@ -156,27 +154,9 @@ namespace Snap.Core
             }
         }
 
-        private string GetMssqlTargetUniqueName(SnapConfiguration.Target target)
-        {
-            StringBuilder sb = new StringBuilder();
-            var connectionStringBuilder = new SqlConnectionStringBuilder(target.Properties["ConnectionString"]);
-            sb.AppendJoin("_", target.Type, connectionStringBuilder.DataSource, connectionStringBuilder.InitialCatalog);
-
-            if (_configuration.Properties.ContainsKey("GitRepositoryRoot"))
-            {
-                var repo = new Repository(_configuration.Properties["GitRepositoryRoot"]);
-                sb.Append($"_{repo.Head.FriendlyName}");
-            }
-
-            return sb
-                .ToString()
-                .Replace('/', '_')
-                .Replace('\\', '_')
-                .Replace('.', '_');
-        }
         private void RunMssqlPack(SnapConfiguration.Target target)
         {
-            var connectionStringBuilder = new SqlConnectionStringBuilder(target.Properties["ConnectionString"]);
+            var connectionStringBuilder = new SqlConnectionStringBuilder(target.GetConnectionStringProperty());
 
             Server srv = new Server(new ServerConnection(new SqlConnection(connectionStringBuilder.ConnectionString)));
 
@@ -194,7 +174,7 @@ namespace Snap.Core
             backup.BackupSetName = $"{connectionStringBuilder.InitialCatalog} Backup";
             backup.Database = connectionStringBuilder.InitialCatalog;
 
-            var targetUniqueName = $"{GetMssqlTargetUniqueName(target)}.bkp";
+            var targetUniqueName = $"{_configuration.GenerateTargetUniqueName(target)}.bkp";
 
             // Declare a BackupDeviceItem by supplying the backup device file name in the constructor, and the type of device is a file.   
             BackupDeviceItem backupDeviceItem = new BackupDeviceItem(targetUniqueName, DeviceType.File);
@@ -220,14 +200,24 @@ namespace Snap.Core
             // Set the database recovery mode back to its original value.  
             db.RecoveryModel = (RecoveryModel)recoveryModel;
 
-            FileSystemUtils.Move(Path.Join(srv.BackupDirectory, targetUniqueName),
-                FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName));
-            FileSystemUtils.Remove(Path.Join(srv.BackupDirectory, targetUniqueName));
+            if (target.IsRunningInDocker)
+            {
+                FileSystemUtils.MoveVirtual(Path.Join(srv.BackupDirectory, targetUniqueName),
+                    FileSystemUtils.FileSystemType.Docker, FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName),
+                    FileSystemUtils.FileSystemType.Local, target.GetContainerIdProperty());
+            }
+            else
+            {
+                FileSystemUtils.Move(Path.Join(srv.BackupDirectory, targetUniqueName),
+                    FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName));
+                FileSystemUtils.Remove(Path.Join(srv.BackupDirectory, targetUniqueName));
+            }
         }
 
         private void RunElasticSearchPack(SnapConfiguration.Target target)
         {
-            var elastic = new ElasticClient(new Uri(target.Properties["Host"]));
+            var elastic = new ElasticClient(new Uri(target.GetHostProperty()));
+            //elastic.Snapshot.ver
         }
 
         private void MssqlIncrementalBackupAndRestore()
@@ -369,7 +359,7 @@ namespace Snap.Core
 
         private void RunMssqlUnpack(SnapConfiguration.Target target)
         {
-            var connectionStringBuilder = new SqlConnectionStringBuilder(target.Properties["ConnectionString"]);
+            var connectionStringBuilder = new SqlConnectionStringBuilder(target.GetConnectionStringProperty());
 
             Server srv = new Server(new ServerConnection(new SqlConnection(connectionStringBuilder.ConnectionString)));
 
@@ -378,11 +368,19 @@ namespace Snap.Core
             // Store the current recovery model in a variable.   
             int recoveryModel = (int)database.DatabaseOptions.RecoveryModel;
 
-            var targetUniqueName = $"{GetMssqlTargetUniqueName(target)}.bkp";
+            var targetUniqueName = $"{_configuration.GenerateTargetUniqueName(target)}.bkp";
 
-            // TODO make this more reliable and account for mssql being run in docker
-            FileSystemUtils.Move(FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName), Path.Join(srv.BackupDirectory));
-
+            if (target.IsRunningInDocker)
+            {
+                FileSystemUtils.MoveVirtual(FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName),
+                    FileSystemUtils.FileSystemType.Local, Path.Join(srv.BackupDirectory, targetUniqueName),
+                    FileSystemUtils.FileSystemType.Docker, target.GetContainerIdProperty());
+            }
+            else
+            {
+                FileSystemUtils.Move(FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName), Path.Join(srv.BackupDirectory, targetUniqueName));
+            }
+            
             // Declare a BackupDeviceItem by supplying the backup device file name in the constructor, and the type of device is a file.   
             BackupDeviceItem backupDeviceItem = new BackupDeviceItem(targetUniqueName, DeviceType.File);
 
@@ -419,7 +417,7 @@ namespace Snap.Core
             // Set the database recovery mode back to its original value.  
             database.RecoveryModel = (RecoveryModel)recoveryModel;
 
-            FileSystemUtils.Remove(FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName));
+            //FileSystemUtils.Remove(FileSystemUtils.GeneratePathForCurrentUser(targetUniqueName));
         }
 
         private void RunElasticvSearchUnpack(SnapConfiguration.Target target)
@@ -437,137 +435,5 @@ namespace Snap.Core
             _environment.LogFatal(message);
             throw new SnapException(message, true);
         }
-    }
-
-    public class SnapConfiguration
-    {
-        public string ConfigurationDirectory { get; set; }
-        public string ConfigurationFile { get; set; }
-        public List<Target> Targets { get; set; }
-        public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
-
-        public class Target
-        {
-            public string Type { get; set; }
-            public bool IsRunningInDocker { get; set; }
-            public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
-            public CommonTask Pack { get; set; }
-            public CommonTask Unpack { get; set; }
-            public CommonTask Clean { get; set; }
-        }
-
-        public class CommonTask
-        {
-            public bool Enable { get; set; }
-        }
-    }
-
-    class SnapException : Exception
-    {
-        public bool Handled { get; }
-        public int ExitCode { get; }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="message"></param>
-        /// <param name="handled">The exception was already handled upstream. Try not throwing if possible.</param>
-        public SnapException(string message, bool handled = false, int exitCode = -1)
-        {
-            Handled = handled;
-            ExitCode = exitCode;
-        }
-    }
-
-    public static class FileSystemUtils
-    {
-        public static bool Remove(string from)
-        {
-            if (File.Exists(from))
-            {
-                File.Delete(from);
-                return true;
-            }
-
-            return false;
-        }
-
-        public enum FileSystemType
-        {
-            Local,
-            Docker
-        }
-
-        public static bool Move(string from, string to)
-        {
-            if (File.Exists(from))
-            {
-                File.Move(from, to, true);
-                return true;
-            }
-
-            return false;
-        }
-
-        public static bool MoveVirtual(string from, FileSystemType fromType, string to, FileSystemType toType,
-            string containerId)
-        {
-            if (fromType == FileSystemType.Local && toType == FileSystemType.Local)
-            {
-                return Move(from, to);
-            }
-            if (fromType == FileSystemType.Docker && toType == FileSystemType.Docker)
-            {
-                throw new NotImplementedException("Moving files between docker containers is not supported");
-            }
-
-            var client = new DockerClientConfiguration(new Uri("npipe://./pipe/docker_engine")).CreateClient();
-            var container = client.Containers.ListContainersAsync(
-                    new ContainersListParameters())
-                .GetAwaiter().GetResult()
-                .Single(x => x.ID.Contains(containerId) || x.Names.Any(n => n.ToLower() == containerId.ToLower()));
-
-            if (fromType == FileSystemType.Docker)
-            {
-                var response = client.Containers.GetArchiveFromContainerAsync(container.ID, new GetArchiveFromContainerParameters { Path = from }, false).GetAwaiter().GetResult();
-                if (File.Exists(to))
-                    File.Delete(to);
-
-                using (var fileStream = File.Create(to))
-                {
-                    response.Stream.Seek(0, SeekOrigin.Begin);
-                    response.Stream.CopyTo(fileStream);
-                }
-            }
-            else
-            {
-                client.Containers
-                    .ExtractArchiveToContainerAsync(container.ID, new ContainerPathStatParameters { AllowOverwriteDirWithFile = true, Path = to },
-                        File.OpenRead(from)).GetAwaiter().GetResult();
-            }
-
-            return true;
-        }
-        public static string GeneratePathForCurrentUser(string fileName = null)
-        {
-            var rootPath = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "snap");
-
-            if (!Directory.Exists(rootPath))
-            {
-                Directory.CreateDirectory(rootPath);
-            }
-
-            var di = new DirectoryInfo(rootPath);
-            di.Attributes = FileAttributes.Normal;
-
-            var ds = new DirectorySecurity(rootPath, AccessControlSections.Access);
-
-            // Using this instead of the "Everyone" string means we work on non-English systems.
-            SecurityIdentifier everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
-            ds.AddAccessRule(new FileSystemAccessRule(everyone, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-
-            return rootPath + (!string.IsNullOrWhiteSpace(fileName) ? $"\\{fileName}" : string.Empty);
-        }
-
     }
 }
