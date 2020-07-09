@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema",
+  "title": "Configuration schema for target definitions",
+  "type": "object",
+  "required": [
+    "Targets"
+  ],
+  "properties": {
+    "Name": {
+      "type": "string",
+      "description": "A unique name of the configuration"
+    },
+    "Properties": {
+      "type": "object",
+      "description": "Global properties",
+      "additionalProperties": true,
+      "properties": {
+        "GitRepositoryRoot": {
+          "type": "string",
+          "description": "The git repository root for the targets if it exists"
+        }
+      }
+    },
+    "Targets": {
+      "type": "array",
+      "description": "An array targets",
+      "items": {
+        "$ref": "#/definitions/Target"
+      }
+    }
+  },
+  "definitions": {
+    "Target": {
+      "type": "object",
+      "description": "Target to run",
+      "required": [
+        "Type"
+      ],
+      "properties": {
+        "Name": {
+          "type": "string",
+          "description": "A unique name of the target"
+        },
+        "Type": {
+          "type": "string",
+          "description": "The type of target to run. This type must be known to the runtime or should be resolvable"
+        },
+        "Pack": {
+          "type": "object",
+          "description": "The pack task description. This task packs a snapshot",
+          "properties": {
+            "Enable": {
+              "type": "boolean",
+              "description": "If the task is enabled"
+            }
+          }
+        },
+        "Restore": {
+          "type": "object",
+          "description": "The restore task description. This task restores a snapshot",
+          "properties": {
+            "Enable": {
+              "type": "boolean",
+              "description": "If the task is enabled"
+            }
+          }
+        },
+        "Clean": {
+          "type": "object",
+          "description": "The pack task description. This task cleans up after the others",
+          "properties": {
+            "Enable": {
+              "type": "boolean",
+              "description": "If the task is enabled"
+            }
+          }
+        },
+        "Properties": {
+          "type": "object",
+          "description": "Target properties",
+          "additionalProperties": true,
+          "properties": {
+            "ConnectionString": {
+              "type": "string",
+              "description": "Used to hold a connection string for any target that needs it"
+            },
+            "Host": {
+              "type": "string",
+              "description": "Used to hold a host url for any target that needs it"
+            },
+            "ContainerId": {
+              "type": "string",
+              "description": "The name or the sha id of the docker container if a target is running in the container"
+            },
+            "IsRunningInDocker": {
+              "type": "boolean",
+              "description": "If the target is running in a docker container"
+            }
+          }
+        },
+        "NameParts": {
+          "type": "array",
+          "description": "Parts used to construct a unique name for the artifacts produced by the packing",
+          "items": {
+            "type": "string",
+            "description": "Single part. Currently known parts are [ConnectionString, Host, ContainerId, GitRepositoryRoot]. These will be resolved to their values. Other parts will be copied as defined."
+          }
+        } 
+      }
+    } 
+  }
+}

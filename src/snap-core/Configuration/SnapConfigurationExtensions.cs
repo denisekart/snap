@@ -22,6 +22,11 @@ namespace Snap.Core
             return GetValueOr(config.Properties, "GitRepositoryRoot", defaultValue);
         }
 
+        public static bool GetIsRunningInDockerContainer(this SnapConfiguration.Target target)
+        {
+            return target.IsRunningInDocker;
+        }
+
         public static string GetConnectionStringProperty(this SnapConfiguration.Target target)
         {
             return GetValueOr(target.Properties, "ConnectionString") ??

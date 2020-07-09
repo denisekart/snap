@@ -11,6 +11,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="Schemas\configuration-schema.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Schemas\configuration-schema.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Docker.DotNet" Version="3.125.2" />
     <PackageReference Include="EnvironmentBuilder" Version="1.1.1" />
     <PackageReference Include="LibGit2Sharp" Version="0.26.2" />
@@ -21,6 +29,7 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="3.1.5" />
     <PackageReference Include="Microsoft.SqlServer.SqlManagementObjects" Version="160.2004021.0" />
     <PackageReference Include="NEST" Version="7.8.1" />
+    <PackageReference Include="Newtonsoft.Json.Schema" Version="3.0.13" />
     <PackageReference Include="System.IO.FileSystem.AccessControl" Version="4.7.0" />
   </ItemGroup>
 

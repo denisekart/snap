@@ -68,7 +68,7 @@ namespace Snap.Core
             /// <summary>
             /// The unpack/restore target
             /// </summary>
-            public CommonTask Unpack { get; set; }
+            public CommonTask Restore { get; set; }
 
             /// <summary>
             /// The clean target
