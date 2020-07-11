@@ -8,6 +8,7 @@ using Microsoft.SqlServer.Management.Smo;
 
 namespace Snap.Core.Runners
 {
+    [CoreRunner]
     public class MssqlTargetRunner : ITargetRunner
     {
         private readonly SnapConfiguration _configuration;

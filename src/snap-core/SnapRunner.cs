@@ -1,27 +1,24 @@
-using System;
-using System.Collections.Generic;
-using System.Data.Common;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Linq.Expressions;
-using System.Net.Http.Headers;
-using System.Reflection;
-using System.Text;
+using Docker.DotNet;
+using Docker.DotNet.Models;
 using EnvironmentBuilder;
 using EnvironmentBuilder.Abstractions;
 using EnvironmentBuilder.Extensions;
-using LibGit2Sharp;
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SqlServer.Management.Common;
-using Microsoft.SqlServer.Management.Smo;
-using Nest;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Schema;
 using Snap.Core.Runners;
+using snap_core;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Text;
+using System.Threading;
 
 namespace Snap.Core
 {
@@ -166,9 +163,6 @@ namespace Snap.Core
 
         private static void ConfigureRunners(IServiceCollection serviceCollection, SnapConfiguration configuration)
         {
-            var path = "C:\\Sandbox";
-            DotnetToolRunner.EnsureTool("dotnet-cleanup", path);
-
             List<string> existingRunners = new List<string>();
             void AddRunner<TRunner>(string type) where TRunner : class, ITargetRunner
             {
@@ -180,6 +174,7 @@ namespace Snap.Core
                     existingRunners.Add(type);
             }
 
+            AddRunner<SnapTargetRunner>("snap");
             // These should be moved to their own assemblies and packages in the future
             AddRunner<MssqlTargetRunner>("mssql");
             AddRunner<ElasticSearchRunner>("elasticsearch");
@@ -241,6 +236,109 @@ namespace Snap.Core
         }
     }
 
+    public class TargetRunnerLoader
+    {
+        public static IEnumerable<Type> GetRunnersFromTool(string tool, string path)
+        {
+            if (!Directory.Exists(path))
+                return Enumerable.Empty<Type>();
+
+            if (!Directory.Exists(Path.Join(path, ".store", tool)))
+                return Enumerable.Empty<Type>();
+
+            var allMatches = Directory.GetFiles(Path.Join(path, ".store", tool), "**/tools/**.dll", SearchOption.AllDirectories);
+            var firstMatch = allMatches.Where(asm =>
+            {
+                var path = Path.GetDirectoryName(asm);
+                return Directory.GetFiles(path, Path.GetFileNameWithoutExtension(asm) + ".deps.json",
+                    SearchOption.TopDirectoryOnly).Any();
+            }).FirstOrDefault();
+
+            if (firstMatch == null)
+                return Enumerable.Empty<Type>();
+
+            var assembly = LoadPlugin(Path.GetFileName(firstMatch), Path.GetDirectoryName(firstMatch));
+            if (assembly == null)
+                return Enumerable.Empty<Type>();
+
+            return assembly.GetTypes().Where(x =>
+                typeof(ITargetRunner).IsAssignableFrom(x) &&
+                !x.IsInterface &&
+                !x.IsAbstract &&
+                !x.GetCustomAttributes(typeof(CoreRunnerAttribute), false).Any())
+                ?.ToArray();
+        }
+
+        static Assembly LoadPlugin(string assemblyName, params string[] probingPaths)
+        {
+            var actualLoadPath = probingPaths.FirstOrDefault(path =>
+            {
+                if (Directory.Exists(path))
+                {
+                    var pathWithFile = Path.Join(path, assemblyName);
+                    if (!assemblyName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pathWithFile += ".dll";
+                    }
+
+                    if (File.Exists(pathWithFile))
+                        return true;
+                }
+
+                return false;
+            });
+
+            if (actualLoadPath == null)
+                return null;
+
+
+            // Navigate up to the solution root
+            string root = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(
+                    Path.GetDirectoryName(
+                        Path.GetDirectoryName(
+                            Path.GetDirectoryName(
+                                Path.GetDirectoryName(typeof(Program).Assembly.Location)))))));
+
+            string pluginLocation = Path.GetFullPath(Path.Combine(actualLoadPath, assemblyName + (assemblyName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? "" : ".dll")));
+            Console.WriteLine($"Loading commands from: {pluginLocation}");
+            PluginLoadContext loadContext = new PluginLoadContext(pluginLocation);
+            return loadContext.LoadFromAssemblyName(new AssemblyName(Path.GetFileNameWithoutExtension(pluginLocation)));
+        }
+    }
+
+    class PluginLoadContext : AssemblyLoadContext
+    {
+        private AssemblyDependencyResolver _resolver;
+
+        public PluginLoadContext(string pluginPath)
+        {
+            _resolver = new AssemblyDependencyResolver(pluginPath);
+        }
+
+        protected override Assembly Load(AssemblyName assemblyName)
+        {
+            string assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
+            if (assemblyPath != null)
+            {
+                return LoadFromAssemblyPath(assemblyPath);
+            }
+
+            return null;
+        }
+
+        protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
+        {
+            string libraryPath = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
+            if (libraryPath != null)
+            {
+                return LoadUnmanagedDllFromPath(libraryPath);
+            }
+
+            return IntPtr.Zero;
+        }
+    }
+
     public class DotnetToolRunner
     {
         private static string ExecDotnet(string arguments)
@@ -267,7 +365,7 @@ namespace Snap.Core
 
             var lines = result.Split("\r\n", StringSplitOptions.RemoveEmptyEntries).Skip(2).ToList();
 
-            return lines.Select(x=>
+            return lines.Select(x =>
             {
                 var items = x.Split("  ", StringSplitOptions.RemoveEmptyEntries);
                 return (items[0], items[1]);
@@ -290,6 +388,52 @@ namespace Snap.Core
             {
                 Install(tool, path);
             }
+        }
+    }
+
+    public static class DockerUtils
+    {
+        internal static byte[] Encode(this string value, out int length)
+        {
+            var result = Encoding.ASCII.GetBytes(value)
+                .Concat(Encoding.ASCII.GetBytes(Environment.NewLine)).ToArray();
+
+            length = result.Length;
+
+            return result;
+        }
+
+        public static void RunCommand(string containerId, params string[] commands)
+        {
+            var client = new DockerClientConfiguration(new Uri("npipe://./pipe/docker_engine")).CreateClient();
+            var container = client.Containers.ListContainersAsync(
+                    new ContainersListParameters())
+                .GetAwaiter().GetResult()
+                .Single(x => x.ID.Contains(containerId) || x.Names.Any(n => n.ToLower().EndsWith(containerId.ToLower())));
+
+            var result = client.Containers.AttachContainerAsync(
+                container.ID,
+                false,
+                new ContainerAttachParameters
+                {
+                    Stderr = false,
+                    Stdin = true,
+                    Stdout = true,
+                    Stream = true
+                }
+            ).GetAwaiter().GetResult();
+
+            foreach (var command in commands)
+            {
+                var encoded = command.Encode(out var length);
+                result.WriteAsync(encoded, 0, length, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                result.WriteAsync(new[] {(byte)0x00}, 0, 1, CancellationToken.None);
+                //result.CloseWrite();
+                var result2 = result.ReadOutputToEndAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+            //https://github.com/dotnet/Docker.DotNet/issues/212
+            //https://github.com/dotnet/Docker.DotNet/issues/223
         }
     }
 }

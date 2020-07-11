@@ -24,7 +24,12 @@ namespace Snap.Core
 
         public static bool GetIsRunningInDockerContainer(this SnapConfiguration.Target target)
         {
-            return target.IsRunningInDocker;
+            var t1 = GetValueOr(target.Properties, "IsRunningInDocker", string.Empty);
+            
+            if (bool.TryParse(t1, out var b) && !b)
+                return false;
+
+            return GetValueOr(target.Properties, "ContainerId") != null;
         }
 
         public static string GetConnectionStringProperty(this SnapConfiguration.Target target)
@@ -43,6 +48,18 @@ namespace Snap.Core
         {
             return GetValueOr(target.Properties, "ContainerId") ??
                    throw new System.Exception("Missing property 'ContainerId' in target " + target.Type);
+        }
+
+        public static string GetTargetDirectoryProperty(this SnapConfiguration.Target target)
+        {
+            return GetValueOr(target.Properties, "TargetDirectory") ??
+                   throw new System.Exception("Missing property 'TargetDirectory' in target " + target.Type);
+        }
+        
+        public static string GetElasticSearchConfigurationFileProperty(this SnapConfiguration.Target target)
+        {
+            return GetValueOr(target.Properties, "ElasticSearchConfigurationFile") ??
+                   throw new System.Exception("Missing property 'ElasticSearchConfigurationFile' in target " + target.Type);
         }
 
         public static string GenerateTargetUniqueName(this SnapConfiguration config, SnapConfiguration.Target target)

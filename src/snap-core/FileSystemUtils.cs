@@ -67,14 +67,13 @@ namespace Snap.Core
 
             if (fromType == FileSystemType.Docker)
             {
-                client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters{WaitBeforeKillSeconds = 10}).GetAwaiter().GetResult();
+                client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }).GetAwaiter().GetResult();
                 var response = client.Containers.GetArchiveFromContainerAsync(container.ID, new GetArchiveFromContainerParameters { Path = from }, false).GetAwaiter().GetResult();
                 if (File.Exists(to))
                     File.Delete(to);
 
                 using (var fileStream = File.Create(to))
                 {
-                    response.Stream.Seek(0, SeekOrigin.Begin);
                     response.Stream.CopyTo(fileStream);
                 }
                 client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters()).GetAwaiter().GetResult();
@@ -95,9 +94,10 @@ namespace Snap.Core
         /// </summary>
         /// <param name="fileName">The file name. Defaults to null</param>
         /// <returns></returns>
-        public static string GeneratePathForCurrentUser(string fileName = null)
+        public static string GeneratePathForCurrentUser(string fileName = null, string extraPathSegments = null)
         {
             var rootPath = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "snap");
+            rootPath = extraPathSegments == null ? rootPath : Path.Join(rootPath, extraPathSegments);
 
             if (!Directory.Exists(rootPath))
             {

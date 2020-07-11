@@ -51,11 +51,6 @@ namespace Snap.Core
             public string Type { get; set; }
 
             /// <summary>
-            /// Specifies that the target is virtual
-            /// </summary>
-            public bool IsRunningInDocker { get; set; }
-
-            /// <summary>
             /// Target specific properties
             /// </summary>
             public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();

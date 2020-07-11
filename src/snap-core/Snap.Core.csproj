@@ -5,8 +5,14 @@
     <LangVersion>8</LangVersion>
     <TargetFramework>netcoreapp3.1</TargetFramework>
     <RootNamespace>Snap.Core</RootNamespace>
+
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>snap</ToolCommandName>
+    <PackageId>dotnet-snap</PackageId>
+    <PackageVersion>0.1.0-pre1</PackageVersion>
+    <Version>0.1.0-pre1</Version>
+    <Authors>Denis Ekart</Authors>
+
     <PackageOutputPath>../../dist/core/package</PackageOutputPath>
   </PropertyGroup>
 
