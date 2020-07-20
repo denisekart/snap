@@ -95,6 +95,7 @@ namespace Snap.Core
             }).OfType<string>())
                 .Replace('/', '_')
                 .Replace('\\', '_')
+                .Replace(':', '_')
                 .Replace('.', '_'); ;
         }
 

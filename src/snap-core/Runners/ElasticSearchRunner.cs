@@ -48,12 +48,23 @@ namespace Snap.Core.Runners
                 }
             }
 
+            elastic.Snapshot.Delete(repositoryName, snapshotName);
+            elastic.Snapshot.CleanupRepository(repositoryName);
+
             var snapshotResult =
                 elastic.Snapshot.Snapshot(repositoryName, snapshotName, snapshot => snapshot.WaitForCompletion());
             if (!snapshotResult.Accepted)
             {
                 throw new SnapException("Snapshot creation was not accepted");
             }
+
+            FileSystemUtils.MoveVirtual(
+                target.GetTargetDirectoryProperty()+"\\".Replace("\\", "/."), 
+                FileSystemUtils.FileSystemType.Docker,
+                FileSystemUtils.GeneratePathForCurrentUser(repositoryNameString), 
+                FileSystemUtils.FileSystemType.Local,
+                target.GetContainerIdProperty(),
+                false);
         }
 
         private void AddRepoPathToElasticConfiguration(SnapConfiguration.Target target)
@@ -63,9 +74,19 @@ namespace Snap.Core.Runners
                 var esFile = Path.GetFileName(target.GetElasticSearchConfigurationFileProperty());
 
                 var stagingPath = FileSystemUtils.GeneratePathForCurrentUser(esFile, $"staging\\{target.Name ?? target.Type}");
+
                 FileSystemUtils.MoveVirtual(target.GetElasticSearchConfigurationFileProperty(),
                     FileSystemUtils.FileSystemType.Docker, stagingPath, FileSystemUtils.FileSystemType.Local,
                     target.GetContainerIdProperty());
+
+                File.AppendAllText(stagingPath, Environment.NewLine +
+                                                  $"path.repo: ['{target.GetTargetDirectoryProperty()}']");
+
+                FileSystemUtils.MoveVirtual(
+                    stagingPath,
+                    FileSystemUtils.FileSystemType.Local,
+                    Path.GetDirectoryName(target.GetElasticSearchConfigurationFileProperty()),
+                    FileSystemUtils.FileSystemType.Docker, target.GetContainerIdProperty());
             }
             else
             {

@@ -1,10 +1,13 @@
+using Docker.DotNet;
+using Docker.DotNet.Models;
+using SharpCompress.Archives;
+using SharpCompress.Common;
+using SharpCompress.Writers;
 using System;
 using System.IO;
 using System.Linq;
 using System.Security.AccessControl;
 using System.Security.Principal;
-using Docker.DotNet;
-using Docker.DotNet.Models;
 
 namespace Snap.Core
 {
@@ -48,7 +51,7 @@ namespace Snap.Core
         /// <param name="containerId">The sha id, or an ending of a container name. Must be unique in regards to all running containers</param>
         /// <returns></returns>
         public static bool MoveVirtual(string from, FileSystemType fromType, string to, FileSystemType toType,
-            string containerId)
+            string containerId, bool extractTar = true)
         {
             if (fromType == FileSystemType.Local && toType == FileSystemType.Local)
             {
@@ -67,24 +70,54 @@ namespace Snap.Core
 
             if (fromType == FileSystemType.Docker)
             {
-                client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }).GetAwaiter().GetResult();
-                var response = client.Containers.GetArchiveFromContainerAsync(container.ID, new GetArchiveFromContainerParameters { Path = from }, false).GetAwaiter().GetResult();
+                client.Containers
+                    .StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 })
+                    .GetAwaiter().GetResult();
+                var response = client.Containers
+                    .GetArchiveFromContainerAsync(container.ID, new GetArchiveFromContainerParameters { Path = from },
+                        false).GetAwaiter().GetResult();
                 if (File.Exists(to))
                     File.Delete(to);
 
-                using (var fileStream = File.Create(to))
+                using (var fileStream = File.Create(to + ".tar"))
                 {
                     response.Stream.CopyTo(fileStream);
                 }
-                client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters()).GetAwaiter().GetResult();
+
+                client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters()).GetAwaiter()
+                    .GetResult();
+
+                if (extractTar)
+                {
+
+                    using (var archive = ArchiveFactory.Open(to + ".tar"))
+                    {
+                        var entry = archive.Entries.Single(x =>
+                            x.Key.Equals(Path.GetFileName(to), StringComparison.OrdinalIgnoreCase));
+                        entry.WriteToDirectory(Path.GetDirectoryName(to),
+                            new SharpCompress.Common.ExtractionOptions { Overwrite = true });
+                    }
+
+                    File.Delete(to + ".tar");
+                }
             }
             else
             {
+                var stagingArchivePath = from + ".tar";
+                using (Stream stream = File.Create(stagingArchivePath))
+                using (var writer = WriterFactory.Open(stream, ArchiveType.Tar, CompressionType.None))
+                {
+                    writer.Write(Path.GetFileName(from), from);
+                }
+
                 client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }).GetAwaiter().GetResult();
+
+                using var archiveStream = File.OpenRead(stagingArchivePath);
                 client.Containers
                     .ExtractArchiveToContainerAsync(container.ID, new ContainerPathStatParameters { AllowOverwriteDirWithFile = true, Path = to },
-                        File.OpenRead(from)).GetAwaiter().GetResult();
-                client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters()).GetAwaiter().GetResult();
+                        archiveStream).GetAwaiter().GetResult();
+                var started = client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters()).GetAwaiter().GetResult();
+
             }
 
             return true;
