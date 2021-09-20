@@ -36,7 +36,7 @@
     <PackageReference Include="Microsoft.SqlServer.SqlManagementObjects" Version="160.2004021.0" />
     <PackageReference Include="NEST" Version="7.8.1" />
     <PackageReference Include="Newtonsoft.Json.Schema" Version="3.0.13" />
-    <PackageReference Include="sharpcompress" Version="0.25.1" />
+    <PackageReference Include="sharpcompress" Version="0.29.0" />
     <PackageReference Include="System.IO.FileSystem.AccessControl" Version="4.7.0" />
   </ItemGroup>
 
